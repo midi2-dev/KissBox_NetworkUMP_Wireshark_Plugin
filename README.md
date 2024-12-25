@@ -1,7 +1,6 @@
 This plugin allows Wireshark to decode incoming Network UMP (Universal MIDI Packet) from a network adapter.
 
-The plugin is still in early development stage and decodes mainly Command Headers in order to identify command packets present in the UDP Payload. It does not yet decode MIDI content of "UMP Data packets" (Command = 0xFF)
-The plugin is based the V0.7.6 protocol preliminary specification 
+The plugin is based the V0.8.1 protocol preliminary specification 
 
 ### How to install the plugin
 * Copy the the Lua file in the Wireshark installation directory, in the /plugin subfolder (on Windows machines, it is typically c:\Program Files\Wireshark\plugin)
@@ -14,8 +13,8 @@ The plugin is based the V0.7.6 protocol preliminary specification
 
 Plugin is now ready to use
 
-### Possible UDP port conflict with Wireshark RTP-MIDI decoders
-The UMP plugin defines port 5004 as default one for Network UMP communication. The same port number is defined by default within Wireshark's RTP-MIDI session decoder (decoder name = *applemidi*). I can happen that the two plugins interact incorrectly, depending on the plugin order in Wireshark memory.
+### Possible conflict with Wireshark RTP-MIDI decoders
+It can happen that the midi2 plugin and the rtpmidi plugin interact incorrectly, depending on the plugin order in Wireshark memory (typically if UDP port used for Network UMP is 5004, as rtpmidi plugin uses this port number by default too)
 
 Two problematic situations can arise :
 * an incoming RTP-MIDI session using port 5004 is being decoded by Network UMP plugin
