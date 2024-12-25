@@ -1,8 +1,8 @@
 -- midi2.lua
 -- Lua plugin for Wireshark to decode Network UMP packets 
--- V0.3
+-- V0.4
 -- 
--- Copyright (c) 2023 Benoit BOUCHEZ / KissBox
+-- Developed by Benoit BOUCHEZ (KissBox) and Pete BROWN (Microsoft)
 -- License : MIT
 --
 -- Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -38,8 +38,12 @@
 --	* Updated to V0.7.6 protocol specification
 --  * Tree structure simplified to see directly type of packet instead of clicking twice
 --  * Added first level of UMP packet decoder
+--
+-- V0.4 - 24/12/2024
+--  * Updated to V0.8.1 protocol specification
+--  * Inclusion of changes made by Pete Brown (Microsoft)
 
-midi2_protocol = Proto ("midi2", "Universal MIDI Protocol on Ethernet/WiFi")
+midi2_protocol = Proto ("midi2", "User Datagram Protocol for Universal MIDI Packets")
 
 midi_header = ProtoField.uint32("midi2_protocol.header", "Header", base.HEX)
 cmd_code_field = ProtoField.uint8("midi2_protocol.command_code", "Command Code", base.HEX)
@@ -52,6 +56,31 @@ nak_reason_field = ProtoField.uint8("midi2_protocol.nak_reason", base.DEC)
 ump_mt_field = ProtoField.uint8("midi2_protocol.mt", base.HEX)
 ump_packet_field = ProtoField.uint8("midi2_protocol.message", base.DEC)
 ump_channel_field = ProtoField.uint8("midi2_protocol.channel", base.DEC)
+
+ump_endpoint_name_field = ProtoField.new("UMP Endpoint Name", "midi2_protocol.ump_endpoint_name", ftypes.STRING)
+product_instance_id_field = ProtoField.new("Product Instance Id", "midi2_protocol.product_instance_id", ftypes.STRING)
+crypto_nonce_field = ProtoField.new("CryptoNonce", "midi2_protocol.crypto_nonce", ftypes.STRING)
+
+midi2_protocol.fields = { ump_endpoint_name_field, product_instance_id_field, crypto_nonce_field }
+
+-- Define constants for Network UMP (re
+INVITATION_COMMAND_CODE				 	 				= 0x01
+INVITATION_AUTHENTICATE_COMMAND_CODE 					= 0x02
+INVITATION_USER_AUTHENTICATE_COMMAND_CODE				= 0x03
+INVITATION_ACCEPTED_COMMAND_CODE						= 0x10
+INVITATION_PENDING_COMMAND_CODE							= 0x11
+INVITATION_AUTHENTICATION_REQUIRED_COMMAND_CODE			= 0x12
+INVITATION_USER_AUTHENTICATION_REQUIRED_COMMAND_CODE	= 0x13
+PING_COMMAND_CODE										= 0x20
+PING_REPLY_COMMAND_CODE									= 0x21
+RETRANSMIT_COMMAND_CODE									= 0x80
+RETRANSMIT_ERROR_COMMAND_CODE							= 0x81
+SESSION_RESET_COMMAND_CODE								= 0x82
+SESSION_RESET_REPLY_COMMAND_CODE						= 0x83
+NAK_COMMAND_CODE										= 0x8F
+BYE_COMMAND_CODE										= 0xF0
+BYE_REPLY_COMMAND_CODE									= 0xF1
+UMP_DATA_COMMAND_CODE									= 0xFF
 
 -- Create array starting at 0 to get number of bytes for each UMP Message Type
 MTSize = {}
@@ -71,6 +100,73 @@ MTSize[12] = 3
 MTSize[13] = 4
 MTSize[14] = 4
 MTSize[15] = 4
+
+-- Return command code name in human readable format
+function get_command_code_display_text (Code)
+	local text;
+	
+	if Code==0xFF then text = "UMP"
+	elseif Code==0x01 then text = "Invitation"
+	elseif Code==0x02 then text = "Invitation with Authentication"
+	elseif Code==0x03 then text = "Invitation with User Authentication"
+	elseif Code==0x10 then text = "Invitation Reply: Accepted"
+	elseif Code==0x11 then text = "Invitation Reply: Pending"
+	elseif Code==0x12 then text = "Invitation Reply: Authentication Required"
+	elseif Code==0x13 then text = "Invitation Reply: User Authentication Required"
+	elseif Code==0x20 then text = "Ping"
+	elseif Code==0x21 then text = "Ping Reply"
+	elseif Code==0x80 then text = "Retransmit Request"
+	elseif Code==0x81 then text = "Retransmit Error"
+	elseif Code==0x82 then text = "Session Reset"
+	elseif Code==0x83 then text = "Session Reset Reply"
+	elseif Code==0x8F then text = "NAK"
+	elseif Code==0xF0 then text = "Bye"
+	elseif Code==0xF1 then text = "Bye Reply"
+	else text = "Unknown command"
+	end
+	
+	return text
+end -- get_command_code_display_text
+-- ---------------------------------
+
+function get_bye_reason_display_text (Code)
+	local text;
+	
+    if Code==0x00 then text = "Reserved"
+    elseif Code==0x01 then text = "User terminated session"
+    elseif Code==0x02 then text = "Power Down"
+    elseif Code==0x03 then text = "Too many missing UMP packets"	
+    elseif Code==0x04 then text = "Timeout / Too many missing PING responses"
+    elseif Code==0x05 then text = "Session not established"
+    elseif Code==0x06 then text = "No pending session"
+    elseif Code==0x07 then text = "Protocol Error"
+    elseif Code==0x40 then text = "Invitation Failed: Too many opened sessions"
+    elseif Code==0x41 then text = "Invitation with Authentication Rejected: Missing prior invitation attempt without authentication"
+    elseif Code==0x42 then text = "Invitation Rejected: User did not accept session"
+    elseif Code==0x43 then text = "Invitation Rejected: Authentication failed"
+    elseif Code==0x44 then text = "Invitation Rejected: User name not found"
+    elseif Code==0x45 then text = "No matching authentication method"
+    elseif Code==0x80 then text = "Invitation canceled"
+    else text = "Unknown reason"
+    end
+	
+	return text
+end -- get_bye_reason_display_text
+-- ---------------------------------
+
+function get_nak_code_display_text (Code)
+	local text;
+	
+	if Code==1 then text = "Command not supported"
+	elseif Code==2 then text = "Command not expected"
+	elseif Code==3 then text = "Command malformed"
+	elseif Code==0x20 then text = "Bad PING reply"
+	else text = "Reserved NAK reason code"
+	end
+	
+	return text
+end  -- get_nak_code_reason_text
+-- ---------------------------------
 
 -- Decode packets with MT = 1 (System Common)
 function decode_MT_1 (subtree, buffer, ByteCounter)
@@ -291,11 +387,20 @@ end  -- decode_ump_command
 -- ---------------------------------
 
 function midi2_protocol.dissector (buffer, pinfo, tree)
-	-- Check that packet we got from Wireshark is not empty
-	length = buffer:len()
-	if length == 0 then
-		return
+    -- 32 bit udp header followed by 32 bit command packet header
+    -- 8 bytes minimum size	length = buffer:len()
+	local length = buffer:len()
+    if length < 8 then
+		return 0
 	end
+	
+	-- Check that packet starts with MIDI signature
+	local LHeader = buffer (0, 4):uint()
+	
+	if LHeader ~= 0x4D494449 then
+		subtree:add ("Packet does not start with correct header")
+		return 0
+	end	
 	
 	-- Put MIDI2 protocol name in "Protocol" column in Wireshark "live list"
 	pinfo.cols.protocol = midi2_protocol.name
@@ -303,155 +408,172 @@ function midi2_protocol.dissector (buffer, pinfo, tree)
 	-- Decode message in the detailed message pane
 	local subtree = tree:add(midi2_protocol, buffer(), "Universal MIDI Protocol")
 	
-	-- Check that packet starts with MIDI signature
-	local LHeader = buffer (0, 4):uint()
-	
-	if LHeader ~= 0x4D494449 then
-		subtree:add ("Packet does not start with correct header")
-		return
-	end
-	
 	-- Parse the whole UDP packet
 	local ByteCounter = 4		-- jump over header
-	local PingID
-	local SequenceCounter
+	local PingID = 0
+	local SequenceCounter = 0
 	local subtree2
 	local subtree3
-	local ByeReason
-	local CSD1
+	local ByeReason = 0
+	local commandCount = 0
+	local CommandHeaderSizeBytes = 4            -- constant value
+    local infoColumnText = ""
 	
 	while (ByteCounter<buffer:len()) do
+	    -- keep track of the number of MIDI command packets in this UDP packet
+        commandCount = commandCount + 1
 	
 		local CmdCode = buffer (ByteCounter, 1):uint()
-		local PayloadLength = buffer (ByteCounter+1, 1):uint()
-		local PayloadLengthBytes = PayloadLength*4			-- Convert Command Payload Length into bytes 	
+		local PayloadLengthWords = buffer (ByteCounter + 1, 1):uint()
+		local PayloadLengthBytes = PayloadLengthWords * 4			-- Convert Command Payload Length into bytes
+		
+		local commandCodeName = get_command_code_display_text(CmdCode)
+        subtree2 = subtree:add(midi2_protocol, buffer:range(ByteCounter, 1), "Command Packet " .. CmdCode .. " : " .. commandCodeName)
+		subtree3 = subtree2:add (payload_len_field, buffer:range(ByteCounter+1, 1), "Payload length in 32-bit words: " .. PayloadLengthWords)
 		
 		-- Interpret command header
-		if CmdCode==0x01 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Invitation")
-			CSD1 = buffer (ByteCounter+2, 1):uint()
-			--subtree3 = subtree2:add (endpoint_name_field, buffer(ByteCounter, 1), "Endpoint Name:")
-			--subtree3:add (product_instance_id_field, buffer(ByteCounter, 1), "Product Instance ID:");
-			-- TODO : add host endpoint name string
-			-- TODO : add host product instance id string
-		elseif CmdCode==0x02 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Invitation with authentication")
-			-- TODO : add Auth Digest hex field
-		elseif CmdCode==0x03 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Invitation with User authentication")
-			-- TODO : add Auth Digest hex field
-			-- TODO : add user name string
-		elseif CmdCode==0x10 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Invitation Reply: Accepted")
-			--subtree3 = subtree2:add (endpoint_name_field, buffer(ByteCounter, 1), "Endpoint Name:")
-			--subtree3:add (product_instance_id_field, buffer(ByteCounter, 1), "Product Instance ID:");			
-			-- TODO : add host endpoint name
-			-- TODO : add client product instance id string
-		elseif CmdCode==0x11 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Invitation Reply: Pending")
-			-- TODO : add host endpoint name string
-		elseif CmdCode==0x12 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Invitation Reply: Authentication Required")
-			-- TODO : add host endpoint name string
-		elseif CmdCode==0x13 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Invitation Reply: User Authentication Required")		
-			-- TODO : add host endpoint name string
-			
-		elseif CmdCode==0x20 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Ping")		
-			PingID = buffer (ByteCounter+4, 4):uint()
-			subtree3 = subtree2:add (ping_id_field, buffer(ByteCounter+4, 4), "Ping ID: " .. PingID)
-			
-		elseif CmdCode==0x21 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Ping Reply")		
-			PingID = buffer (ByteCounter+4, 4):uint()
-			subtree3 = subtree2:add (ping_id_field, buffer(ByteCounter+4, 4), "Ping ID: " .. PingID)			
-			
-		elseif CmdCode==0x80 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Retransmit")		
-		elseif CmdCode==0x81 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Retransmit Error")		
-		elseif CmdCode==0x82 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Report")		
-		elseif CmdCode==0x8F then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "NAK")		
-			NAKReason = buffer (ByteCounter+2, 1):uint()
-			if NAKReason==1 then
-				subtree3 = subtree2:add (nak_reason_field, buffer(ByteCounter+2, 1), "Reason : Command not supported")
-			elseif NAKReason==2 then
-				subtree3 = subtree2:add (nak_reason_field, buffer(ByteCounter+2, 1), "Reason : Command not expected")
-			elseif NAKReason==3 then
-				subtree3 = subtree2:add (nak_reason_field, buffer(ByteCounter+2, 1), "Reason : Command malformed")
-			elseif NAKReason==0x10 then
-				subtree3 = subtree2:add (nak_reason_field, buffer(ByteCounter+2, 1), "Reason : Session not active")
-			elseif NAKReason==0x11 then
-				subtree3 = subtree2:add (nak_reason_field, buffer(ByteCounter+2, 1), "Reason : Authentication not accepted")
-			elseif NAKReason==0x12 then
-				subtree3 = subtree2:add (nak_reason_field, buffer(ByteCounter+2, 1), "Reason : No pending invitation")
-			elseif NAKReason==0x21 then
-				subtree3 = subtree2:add (nak_reason_field, buffer(ByteCounter+2, 1), "Reason : Bad Ping reply")
-			elseif NAKReason==0x20 then
-				subtree3 = subtree2:add (nak_reason_field, buffer(ByteCounter+2, 1), "Reason : Missing UMP packets")
-			else
-				subtree3 = subtree2:add (nak_reason_field, buffer(ByteCounter+2, 1), "Reserved NAK reason code")				
-			-- TODO : add display of rejected command
+		if CmdCode==INVITATION_COMMAND_CODE	then
+            local umpEndpointNameLengthInWords = buffer (ByteCounter+2, 1):uint()
+    		subtree3:add (command_specific_byte1_field, buffer:range(ByteCounter+2, 1), "UMP Endpoint Name Length in 32-bit words: " .. umpEndpointNameLengthInWords)
+
+            local Flags = buffer (ByteCounter+3, 1):uint()
+			if (bit32.band(Flags, 0x01) > 0) then
+				subtree3:add (command_specific_byte2_field, buffer:range(ByteCounter+3, 1), "Flag: Client supports sending Invitation with Authentication")
 			end
-			
-		elseif CmdCode==0xF0 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Bye")		
-			ByeReason = buffer (ByteCounter+2, 1):uint()
-			-- TODO : add reason message if it exists in the packet
-			if ByeReason==1 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : User terminated session")	
-			elseif ByeReason==2 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : Power Down")				
-			elseif ByeReason==3 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : Too many missing UMP packets")				
-			elseif ByeReason==4 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : Timeout / Too many missing PING responses")				
-			elseif ByeReason==5 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : Session not active")				
-			elseif ByeReason==0x40 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : Invitation failed / Too many opened sessions")							
-			elseif ByeReason==0x42 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : Invitation failed / User did not accept session")
-			elseif ByeReason==0x43 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : Invitation failed / Authentication failed")
-			elseif ByeReason==0x44 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : Invitation failed / User name not found")
-			elseif ByeReason==0x80 then 
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason : Invitation canceled")
-			else
-				subtree3 = subtree2:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reserved BYE reason code")
+
+			if (bit32.band(Flags, 0x02) > 0) then
+				subtree3:add (command_specific_byte2_field, buffer:range(ByteCounter+3, 1), "Flag: Client supports sending Invitation with User Authentication")
 			end
+
+            local umpEndpointNameStartByte = ByteCounter + CommandHeaderSizeBytes
+            local umpEndpointNameByteCount = umpEndpointNameLengthInWords * 4
+            subtree3:add_packet_field(ump_endpoint_name_field, buffer:range(umpEndpointNameStartByte, umpEndpointNameByteCount), ENC_UTF_8)
+            
+            local productInstanceIdStartByte = umpEndpointNameStartByte + umpEndpointNameByteCount
+            local productInstanceIdByteCount = PayloadLengthBytes - umpEndpointNameByteCount
+            subtree3:add_packet_field(product_instance_id_field, buffer:range(productInstanceIdStartByte, productInstanceIdByteCount), ENC_ASCII)
+		
+            infoColumnText = commandCodeName .. " from " .. buffer(umpEndpointNameStartByte, umpEndpointNameByteCount):string(ENC_UTF_8)
+
+		elseif CmdCode==INVITATION_AUTHENTICATE_COMMAND_CODE then
+			-- TODO : add flags and endpoint name
+            infoColumnText = commandCodeName .. " from "
 			
-		elseif CmdCode==0xF1 then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Bye Reply")		
-			--subtree2:add (cmd_code_field, buffer(ByteCounter, 1), "Bye Reply")
+		elseif CmdCode==INVITATION_USER_AUTHENTICATE_COMMAND_CODE then
+			-- TODO : add flags and endpoint name
+            infoColumnText = commandCodeName .. " from "
 			
-		elseif CmdCode==0xFF then
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "UMP Packet")			
+		elseif CmdCode==INVITATION_ACCEPTED_COMMAND_CODE then
+            local umpEndpointNameLengthInWords = buffer (ByteCounter+2, 1):uint()
+    		subtree3:add (command_specific_byte1_field, buffer:range(ByteCounter+2, 1), "UMP Endpoint Name Length in 32-bit words: " .. umpEndpointNameLengthInWords)
+
+            local umpEndpointNameStartByte = ByteCounter + CommandHeaderSizeBytes
+            local umpEndpointNameByteCount = umpEndpointNameLengthInWords * 4
+            subtree3:add_packet_field(ump_endpoint_name_field, buffer:range(umpEndpointNameStartByte, umpEndpointNameByteCount), ENC_UTF_8)
+            
+            local productInstanceIdStartByte = umpEndpointNameStartByte + umpEndpointNameByteCount
+            local productInstanceIdByteCount = PayloadLengthBytes - umpEndpointNameByteCount
+            subtree3:add_packet_field(product_instance_id_field, buffer:range(productInstanceIdStartByte, productInstanceIdByteCount), ENC_ASCII)
+			
+            infoColumnText = commandCodeName .. " from " .. buffer(umpEndpointNameStartByte, umpEndpointNameByteCount):string(ENC_UTF_8)
+			
+		elseif CmdCode==INVITATION_PENDING_COMMAND_CODE then
+            infoColumnText = commandCodeName .. " from "
+			
+		elseif CmdCode==INVITATION_AUTHENTICATION_REQUIRED_COMMAND_CODE then
+            local umpEndpointNameLengthInWords = buffer (ByteCounter+2, 1):uint()
+    		subtree3:add (command_specific_byte1_field, buffer:range(ByteCounter+2, 1), "UMP Endpoint Name Length in 32-bit words: " .. umpEndpointNameLengthInWords)
+
+            -- todo: authentication state enum
+
+            local cryptoNonceStartByte = ByteCounter + CommandHeaderSizeBytes
+            local cryptoNonceByteCount = 16
+            subtree3:add_packet_field(crypto_nonce_field, buffer:range(cryptoNonceStartByte, cryptoNonceByteCount), ENC_UTF_ASCII)
+
+            local umpEndpointNameStartByte = ByteCounter + CommandHeaderSizeBytes
+            local umpEndpointNameByteCount = umpEndpointNameLengthInWords * 4
+            subtree3:add_packet_field(ump_endpoint_name_field, buffer:range(umpEndpointNameStartByte, umpEndpointNameByteCount), ENC_UTF_8)
+            
+            local productInstanceIdStartByte = umpEndpointNameStartByte + umpEndpointNameByteCount
+            local productInstanceIdByteCount = PayloadLengthBytes - umpEndpointNameByteCount - cryptoNonceByteCount
+            subtree3:add_packet_field(product_instance_id_field, buffer:range(productInstanceIdStartByte, productInstanceIdByteCount), ENC_ASCII)
+
+            infoColumnText = commandCodeName .. " from " .. buffer(umpEndpointNameStartByte, umpEndpointNameByteCount):string(ENC_UTF_8)
+			
+		elseif CmdCode==INVITATION_USER_AUTHENTICATION_REQUIRED_COMMAND_CODE then
+            infoColumnText = commandCodeName
+			
+		elseif CmdCode==PING_COMMAND_CODE then
+			PingID = buffer (ByteCounter + 4, 4):uint()
+			subtree3:add (ping_id_field, buffer(ByteCounter+4, 4), "Ping ID: " .. PingID)
+			
+            infoColumnText = commandCodeName .. " " .. PingID
+			
+		elseif CmdCode==PING_REPLY_COMMAND_CODE then
+			PingID = buffer (ByteCounter+4, 4):uint()
+			subtree3:add (ping_id_field, buffer(ByteCounter+4, 4), "Ping ID: " .. PingID)			
+
+            infoColumnText = commandCodeName .. " " .. PingID		
+			
+		elseif CmdCode==RETRANSMIT_COMMAND_CODE then
+            infoColumnText = commandCodeName
+			
+		elseif CmdCode==RETRANSMIT_ERROR_COMMAND_CODE then
+            infoColumnText = commandCodeName
+			
+		elseif CmdCode==SESSION_RESET_COMMAND_CODE then
+            infoColumnText = commandCodeName
+			
+		elseif CmdCode==SESSION_RESET_REPLY_COMMAND_CODE then
+            infoColumnText = commandCodeName
+			
+		elseif CmdCode==NAK_COMMAND_CODE then
+			NAKReason = buffer (ByteCounter+2, 1):uint()			
+            subtree3:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason: " .. get_nak_code_display_text(NAKReason))
+		
+            infoColumnText = commandCodeName
+						
+		elseif CmdCode==BYE_COMMAND_CODE then
+            ByeReason = buffer (ByteCounter+2, 1):uint()
+            subtree3:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason: " .. get_bye_reason_display_text(ByeReason))
+		
+            infoColumnText = commandCodeName
+			
+		elseif CmdCode==BYE_REPLY_COMMAND_CODE then
+            infoColumnText = commandCodeName
+			
+		elseif CmdCode==UMP_DATA_COMMAND_CODE then
 			SequenceCounter = buffer (ByteCounter+2, 2):uint()
-			subtree3 = subtree2:add (sequence_number_field, buffer(ByteCounter+2, 2), "Sequence Number: " .. SequenceCounter)
 			
 			-- Display UMP messages from the payload
-			decode_ump_command (subtree3, buffer, ByteCounter, PayloadLength)
+			decode_ump_command (subtree3, buffer, ByteCounter, PayloadLengthWords)
 			
+			infoColumnText = commandCodeName
 		else
 			-- Unknown command : display raw content
-			subtree2 = subtree:add(midi2_protocol, buffer(ByteCounter, PayloadLengthBytes+4), "Unknown command code")		
-			subtree3 = subtree2:add (payload_len_field, buffer(ByteCounter+1, 1), "Payload length")		
+			subtree3:add (payload_len_field, buffer(ByteCounter+1, 1), "Payload length")	
+            
+            infoColumnText = commandCodeName
 		end
-
-		-- Jump over Command Packet Header
-		ByteCounter=ByteCounter+4		
-
-		-- Go to next Command Packet
-		ByteCounter=ByteCounter+PayloadLengthBytes
+		
+		-- Go to next packet, if there is one
+		ByteCounter = ByteCounter + CommandHeaderSizeBytes + PayloadLengthBytes
+		
+		-- for single-command packets, we display in the info column
+        if (ByteCounter >= buffer:len() and commandCount == 1) then
+            pinfo.cols.info = infoColumnText
+        elseif (ByteCounter >= buffer:len() and commandCount > 1) then
+            pinfo.cols.info = "Multiple Command Packets"
+        end
 	end  -- while
+	
+	    -- for heuristic matching, returning a number > 0 means it's a match
+    return ByteCounter
 end		-- midi2_protocol.dissector
 -- ---------------------------------
 
 -- Associate this dissector to port 5004 by default
-local udp_port = DissectorTable.get("udp.port")
-udp_port:add(5004, midi2_protocol)
+--local udp_port = DissectorTable.get("udp.port")
+--udp_port:add(5004, midi2_protocol)
+				
+midi2_protocol:register_heuristic("udp", midi2_protocol.dissector)
