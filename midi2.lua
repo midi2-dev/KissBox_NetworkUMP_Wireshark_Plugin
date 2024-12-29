@@ -1,6 +1,6 @@
 -- midi2.lua
 -- Lua plugin for Wireshark to decode Network UMP packets 
--- V0.4
+-- V0.5
 -- 
 -- Developed by Benoit BOUCHEZ (KissBox) and Pete BROWN (Microsoft)
 -- License : MIT
@@ -42,6 +42,10 @@
 -- V0.4 - 24/12/2024
 --  * Updated to V0.8.1 protocol specification
 --  * Inclusion of changes made by Pete Brown (Microsoft)
+--
+-- V0.5 - 27/12/2024
+--  * All references to bit32 removed as latest Wireshark version (4.4.2) uses Lua 5.4 (bit32 library removed since Lua 5.3)
+--  * Enhanced UMP decoding (display of Group, Channel, Note Number, etc...)
 
 midi2_protocol = Proto ("midi2", "User Datagram Protocol for Universal MIDI Packets")
 
@@ -55,7 +59,13 @@ ping_id_field = ProtoField.uint32("midi2_protocol.ping_id", base.DEC)
 nak_reason_field = ProtoField.uint8("midi2_protocol.nak_reason", base.DEC)
 ump_mt_field = ProtoField.uint8("midi2_protocol.mt", base.HEX)
 ump_packet_field = ProtoField.uint8("midi2_protocol.message", base.DEC)
+ump_group_field = ProtoField.uint8("midi2_protocol.group", base.DEC)
 ump_channel_field = ProtoField.uint8("midi2_protocol.channel", base.DEC)
+ump_midi_byte1_field = ProtoField.uint8("midi2_protocol.byte1", base.DEC)
+ump_midi_byte2_field = ProtoField.uint8("midi2_protocol.byte2", base.DEC)
+ump_midi_data32_field = ProtoField.uint32("midi2_protocol.data32", base.DEC)
+ump_midi2_note_velocity_field = ProtoField.uint16("midi2_protocol.midi2_note_velocity", base.DEC)
+ump_midi2_note_attribute_field = ProtoField.uint16("midi2_protocol.midi2_note_attribute", base.DEC)
 
 ump_endpoint_name_field = ProtoField.new("UMP Endpoint Name", "midi2_protocol.ump_endpoint_name", ftypes.STRING)
 product_instance_id_field = ProtoField.new("Product Instance Id", "midi2_protocol.product_instance_id", ftypes.STRING)
@@ -201,92 +211,213 @@ end  -- decode_MT_1
 
 -- Decode packets with MT = 2 (MIDI 1.0 Channel Voice)
 function decode_MT_2 (subtree, buffer, ByteCounter)
-	local Status = buffer (ByteCounter+1, 1):uint()
 	local PacketDetailTree
+	local Group = buffer (ByteCounter, 1):uint()
+	local Status = buffer (ByteCounter+1, 1):uint()
 	local Channel = buffer (ByteCounter+1, 1):uint()
+	local DataByte1 = buffer (ByteCounter+2, 1):uint()
+	local DataByte2 = buffer (ByteCounter+3, 1):uint()
 	
-	Status = bit32.band(Status, 0xF0)		-- Get status
-	Channel = bit32.band(Channel, 0x0F)
+	-- bit32 library has been removed from Lua 5.3
+	--Status = bit32.band(Status, 0xF0)
+	--Channel = bit32.band(Channel, 0x0F)
+	--Group = bit32.band(Group, 0x0F)
+
+	Status = Status & 0xF0
+	Channel = Channel & 0x0F
+	Group = Group & 0x0F
+	DataByte1 = DataByte1 & 0x7F
+	DataByte2 = DataByte2 & 0x7F
+	
 	if Status==0x80 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "MIDI 1.0 Note Off")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Velocity:" .. DataByte2)
 	elseif Status==0x90 then
-		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "MIDI 1.0 Note On")
-		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		if DataByte2 == 0 then
+			PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "MIDI 1.0 Note Off")
+			PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
+			PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+			PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		else
+			PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "MIDI 1.0 Note On")
+			PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
+			PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+			PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+			PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Velocity:" .. DataByte2)
+		end
 	elseif Status==0xA0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "MIDI 1.0 Poly Pressure")	
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+3, 1), "Pressure:" .. DataByte2)		
 	elseif Status==0xB0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "MIDI 1.0 Control Change")	
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Control:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+3, 1), "Value:" .. DataByte2)		
 	elseif Status==0xC0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "MIDI 1.0 Program Change")		
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Program:" .. DataByte1)
 	elseif Status==0xD0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "MIDI 1.0 Channel Pressure")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Pressure:" .. DataByte1)		
 	elseif Status==0xE0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "MIDI 1.0 Pitch Bend")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PackatDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 2), "PitchBend:" .. (DataByte2*128)+DataByte1)
 	else
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 4), "Unknown MIDI 1.0 packet")
 	end
 end  -- decode_MT_2
 -- ---------------------------------
 
--- Decode packets with MT = 4 (MIDI 2.0 Channel Voice)
+-- Decode packets with MT = 4 (MIDI 2.0 Channel Voice message)
 function decode_MT_4 (subtree, buffer, ByteCounter)
 	local Status = buffer (ByteCounter+1, 1):uint()
 	local PacketDetailTree
 	local Channel = buffer (ByteCounter+1, 1):uint()
+	local Group = buffer (ByteCounter, 1):uint()
+	local DataByte1 = buffer (ByteCounter+2, 1):uint()
+	local DataByte2 = buffer (ByteCounter+3, 1):uint()
+	local MIDI2Data = buffer (ByteCounter+4, 4):uint()
+	local NoteVelocity = buffer (ByteCounter+4, 2):uint()
+	local NoteAttribute = buffer (ByteCounter+6, 2):uint()
 	
-	Status = bit32.band(Status, 0xF0)		-- Get status
-	Channel = bit32.band(Channel, 0x0F)
+	-- bit32 library has been removed from Lua 5.3
+	--Status = bit32.band(Status, 0xF0)
+	--Channel = bit32.band(Channel, 0x0F)
+	--Group = bit32.band(Group, 0x0F)
+	
+	Status = Status & 0xF0
+	Channel = Channel & 0x0F
+	Group = Group & 0x0F
+		
 	if Status==0x00 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Registered Per Note Controller")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Index:" .. DataByte2)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Value:" .. MIDI2Data)	
+		
 	elseif Status==0x10 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Assignable Per Note Controller")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Index:" .. DataByte2)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Value:" .. MIDI2Data)	
+		
 	elseif Status==0x20 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Registered Controller (RPN)")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Bank:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Index:" .. DataByte2)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Value:" .. MIDI2Data)		
+		
 	elseif Status==0x30 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Assignable Controller (NRPN)")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Bank:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Index:" .. DataByte2)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Value:" .. MIDI2Data)		
+		
 	elseif Status==0x40 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Relative Registered Controller")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Bank:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Index:" .. DataByte2)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Value:" .. MIDI2Data)	
+		
 	elseif Status==0x50 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Relative Assignable Controller")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Bank:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Index:" .. DataByte2)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Value:" .. MIDI2Data)	
+		
 	elseif Status==0x60 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Per-Note Pitch Bend")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Value:" .. MIDI2Data)
+		
 	elseif Status==0x80 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Note Off")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Attribute Type:" .. DataByte2)
+		PacketDetailTree:add (ump_midi2_note_velocity_field, buffer(ByteCounter+4, 2), "Velocity:" .. NoteVelocity)
+		PacketDetailTree:add (ump_midi2_note_attribute_field, buffer(ByteCounter+6, 2), "Attribute:" .. NoteAttribute)
+
 	elseif Status==0x90 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Note On")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Attribute Type:" .. DataByte2)
+		PacketDetailTree:add (ump_midi2_note_velocity_field, buffer(ByteCounter+4, 2), "Velocity:" .. NoteVelocity)
+		PacketDetailTree:add (ump_midi2_note_attribute_field, buffer(ByteCounter+6, 2), "Attribute:" .. NoteAttribute)
+
 	elseif Status==0xA0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Poly Pressure")	
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Pressure:" .. MIDI2Data)
+
 	elseif Status==0xB0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Control Change")	
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Control:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Value:" .. MIDI2Data)
+		
 	elseif Status==0xC0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Program Change")		
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		if ((DataByte2&0x01) == 0x01) then
+			PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Bank MSB:" .. (MIDI2Data>>8)&0x7F)	
+			PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Bank LSB:" .. MIDI2Data&0x7F)				
+		end
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Program:" .. MIDI2Data>>24)		
+		
 	elseif Status==0xD0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Channel Pressure")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Pressure:" .. MIDI2Data)
+		
 	elseif Status==0xE0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Pitch Bend")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_data32_field, buffer(ByteCounter+4, 4), "Value:" .. MIDI2Data)
+		
 	elseif Status==0xF0 then
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "MIDI 2.0 Per Note Management")
+		PacketDetailTree:add (ump_group_field, buffer(ByteCounter, 1), "Group:" .. Group)
 		PacketDetailTree:add (ump_channel_field, buffer(ByteCounter+1, 1), "Channel:" .. Channel)
+		PacketDetailTree:add (ump_midi_byte1_field, buffer(ByteCounter+2, 1), "Note:" .. DataByte1)
+		PacketDetailTree:add (ump_midi_byte2_field, buffer(ByteCounter+3, 1), "Options:" .. DataByte2)
+		
 	else
 		PacketDetailTree = subtree:add(ump_packet_field, buffer(ByteCounter, 8), "Unknown MIDI 2.0 packet")
 	end
@@ -329,7 +460,7 @@ end -- decode_MT_F
 -- ---------------------------------
 
 function decode_ump_command (subtree, buffer, ByteCounter, PayloadLength)
-	local MT
+	local MT = 0
 	local UMPSize
 	local PayloadCounter = 0;
 	local PacketDetailTree
@@ -340,7 +471,11 @@ function decode_ump_command (subtree, buffer, ByteCounter, PayloadLength)
 	-- Loop over all messages in the payload (a single UMP Data Command can contain multiple UMP messages)
 	while (PayloadCounter<PayloadLength) do
 		MT = buffer (ByteCounter, 1):uint()
-		MT = bit32.rshift(MT, 4)
+		
+		-- bit32 library has been removed from Lua 5.3
+		--MT = bit32.rshift(MT, 4)
+		MT = MT >> 4
+		
 		UMPSize = MTSize[MT]	
 		
 		if MT==0x00 then
@@ -437,11 +572,14 @@ function midi2_protocol.dissector (buffer, pinfo, tree)
     		subtree3:add (command_specific_byte1_field, buffer:range(ByteCounter+2, 1), "UMP Endpoint Name Length in 32-bit words: " .. umpEndpointNameLengthInWords)
 
             local Flags = buffer (ByteCounter+3, 1):uint()
-			if (bit32.band(Flags, 0x01) > 0) then
+			-- bit32 library has been removed from Lua 5.3
+			--if (bit32.band(Flags, 0x01) == 0x01) then
+			if ((Flags & 0x01) == 0x01) then
 				subtree3:add (command_specific_byte2_field, buffer:range(ByteCounter+3, 1), "Flag: Client supports sending Invitation with Authentication")
 			end
 
-			if (bit32.band(Flags, 0x02) > 0) then
+			--if (bit32.band(Flags, 0x02) == 0x02) then
+			if ((Flags & 0x02) == 0x02) then
 				subtree3:add (command_specific_byte2_field, buffer:range(ByteCounter+3, 1), "Flag: Client supports sending Invitation with User Authentication")
 			end
 
@@ -529,13 +667,13 @@ function midi2_protocol.dissector (buffer, pinfo, tree)
 			
 		elseif CmdCode==NAK_COMMAND_CODE then
 			NAKReason = buffer (ByteCounter+2, 1):uint()			
-            subtree3:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason: " .. get_nak_code_display_text(NAKReason))
+            subtree3:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason:" .. get_nak_code_display_text(NAKReason))
 		
             infoColumnText = commandCodeName
 						
 		elseif CmdCode==BYE_COMMAND_CODE then
             ByeReason = buffer (ByteCounter+2, 1):uint()
-            subtree3:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason: " .. get_bye_reason_display_text(ByeReason))
+            subtree3:add (command_specific_byte1_field, buffer(ByteCounter+2, 1), "Reason:" .. get_bye_reason_display_text(ByeReason))
 		
             infoColumnText = commandCodeName
 			
@@ -544,6 +682,7 @@ function midi2_protocol.dissector (buffer, pinfo, tree)
 			
 		elseif CmdCode==UMP_DATA_COMMAND_CODE then
 			SequenceCounter = buffer (ByteCounter+2, 2):uint()
+			subtree3:add (sequence_number_field, buffer(ByteCounter+2, 2), "Sequence Number:" .. SequenceCounter)
 			
 			-- Display UMP messages from the payload
 			decode_ump_command (subtree3, buffer, ByteCounter, PayloadLengthWords)
