@@ -642,7 +642,7 @@ function midi2_protocol.dissector (buffer, pinfo, tree)
             local cryptoNonceByteCount = 16
             subtree3:add_packet_field(crypto_nonce_field, buffer:range(cryptoNonceStartByte, cryptoNonceByteCount), ENC_ASCII)
 
-            local umpEndpointNameStartByte = ByteCounter + CommandHeaderSizeBytes
+            local umpEndpointNameStartByte = cryptoNonceStartByte + cryptoNonceByteCount
             local umpEndpointNameByteCount = umpEndpointNameLengthInWords * 4
             subtree3:add_packet_field(ump_endpoint_name_field, buffer:range(umpEndpointNameStartByte, umpEndpointNameByteCount), ENC_UTF_8)
             
