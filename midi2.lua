@@ -70,7 +70,7 @@ authentication_state_field = ProtoField.uint8("midi2_protocol.authentication_sta
 
 ump_endpoint_name_field = ProtoField.new("UMP Endpoint Name", "midi2_protocol.ump_endpoint_name", ftypes.STRING)
 product_instance_id_field = ProtoField.new("Product Instance Id", "midi2_protocol.product_instance_id", ftypes.STRING)
-crypto_nonce_field = ProtoField.new("CryptoNonce", "midi2_protocol.crypto_nonce", ftypes.STRING)
+crypto_nonce_field = ProtoField.new("CryptoNonce", "midi2_protocol.crypto_nonce", ftypes.BYTES)
 
 midi2_protocol.fields = { ump_endpoint_name_field, product_instance_id_field, crypto_nonce_field }
 
@@ -640,7 +640,7 @@ function midi2_protocol.dissector (buffer, pinfo, tree)
 
             local cryptoNonceStartByte = ByteCounter + CommandHeaderSizeBytes
             local cryptoNonceByteCount = 16
-            subtree3:add_packet_field(crypto_nonce_field, buffer:range(cryptoNonceStartByte, cryptoNonceByteCount), ENC_UTF_ASCII)
+            subtree3:add_packet_field(crypto_nonce_field, buffer:range(cryptoNonceStartByte, cryptoNonceByteCount), ENC_ASCII)
 
             local umpEndpointNameStartByte = ByteCounter + CommandHeaderSizeBytes
             local umpEndpointNameByteCount = umpEndpointNameLengthInWords * 4
