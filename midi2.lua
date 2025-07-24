@@ -66,6 +66,7 @@ ump_midi_byte2_field = ProtoField.uint8("midi2_protocol.byte2", base.DEC)
 ump_midi_data32_field = ProtoField.uint32("midi2_protocol.data32", base.DEC)
 ump_midi2_note_velocity_field = ProtoField.uint16("midi2_protocol.midi2_note_velocity", base.DEC)
 ump_midi2_note_attribute_field = ProtoField.uint16("midi2_protocol.midi2_note_attribute", base.DEC)
+authentication_state_field = ProtoField.uint8("midi2_protocol.authentication_state", base.HEX)
 
 ump_endpoint_name_field = ProtoField.new("UMP Endpoint Name", "midi2_protocol.ump_endpoint_name", ftypes.STRING)
 product_instance_id_field = ProtoField.new("Product Instance Id", "midi2_protocol.product_instance_id", ftypes.STRING)
@@ -176,6 +177,18 @@ function get_nak_code_display_text (Code)
 	
 	return text
 end  -- get_nak_code_reason_text
+-- ---------------------------------
+
+function get_auth_state_display_text(Code)
+    local text
+
+    if Code==0 then text = "First authentication request"
+    elseif Code==1 then text = "Previously provided Authentication Digest is not correct"
+    else text = "Reserved authentication state code"
+    end
+
+    return text
+end  -- get_auth_state_display_text
 -- ---------------------------------
 
 -- Decode packets with MT = 1 (System Common)
@@ -622,7 +635,8 @@ function midi2_protocol.dissector (buffer, pinfo, tree)
             local umpEndpointNameLengthInWords = buffer (ByteCounter+2, 1):uint()
     		subtree3:add (command_specific_byte1_field, buffer:range(ByteCounter+2, 1), "UMP Endpoint Name Length in 32-bit words: " .. umpEndpointNameLengthInWords)
 
-            -- todo: authentication state enum
+            local authenticationState = buffer(ByteCounter+3, 1):uint()
+            subtree3:add(authentication_state_field, buffer:range(ByteCounter+3, 1), "Authentication state: " .. get_auth_state_display_text(authenticationState))
 
             local cryptoNonceStartByte = ByteCounter + CommandHeaderSizeBytes
             local cryptoNonceByteCount = 16
