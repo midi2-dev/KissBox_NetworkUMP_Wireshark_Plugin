@@ -1,6 +1,9 @@
 This plugin allows Wireshark to decode incoming Network UMP (Universal MIDI Packet) from a network adapter.
 
-The plugin is based the V0.8.1 protocol preliminary specification 
+The plugin is based on MMA document M2-124-UM "User Datagram Protocol for Universal MIDI Packets" version 1.0
+
+**IMPORTANT : the plugin requires Wireshark with Lua 5.4 to run.** Previous versions of Lua used the bit32 library, while Lua 5.4 switched to "C-style" bit operators ("&", "^", "|", etc...)
+If you get an error from Wireshark complaining about "&" symbols, you will need to update your Wireshark to a more recent version (the version of Wireshark on which the plugin was written is V4.4.2 from 2024)
 
 ### How to install the plugin
 * Copy the the Lua file in the Wireshark installation directory, in the /plugin subfolder (on Windows machines, it is typically c:\Program Files\Wireshark\plugin)
